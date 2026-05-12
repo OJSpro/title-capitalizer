@@ -1,9 +1,9 @@
 /**
  * Title Capitalizer for OJS/OMP 3.4
  *
- * The Title and Subtitle fields use "field-rich-text" (TinyMCE), NOT plain
- * <input> elements. This script hooks into TinyMCE editors whose IDs contain
- * "title" or "subtitle" and injects an aA button into their container.
+ * Auto-capitalizes the Title and Subtitle fields on blur and paste.
+ * Works with plain <input>, contenteditable divs, and TinyMCE inline editors.
+ * Detects fields by their visible label text ("Title" / "Subtitle").
  */
 (function () {
 
@@ -12,7 +12,7 @@
     var SMALL_WORDS = /^(a|an|and|as|at|but|by|en|for|if|in|nor|of|on|or|per|so|the|to|v\.?|vs\.?|via|yet)$/i;
 
     function capitalizeTitle(str, style) {
-        str = (str || '').replace(/\s+/g, ' ').trim();
+        str = (str || '').replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim(); // strip HTML
         if (!str) return str;
 
         switch (style) {
@@ -34,158 +34,95 @@
         }
     }
 
-    // ─── Inject button into a TinyMCE editor container ─────────────────────────
+    // ─── Apply to an element (input or contenteditable) ────────────────────────
 
-    function addButtonToEditor(editor) {
-        var editorId = (editor.id || '').toLowerCase();
+    function applyCapitalization(el) {
+        var style = window.titleCapitalizerStyle || 'chicago';
 
-        // Only process title / subtitle fields
-        if (editorId.indexOf('title') === -1 && editorId.indexOf('subtitle') === -1) {
-            return;
-        }
-
-        function doInject() {
-            var container = editor.getContainer();
-            if (!container || container.dataset.tcTinyInit) return;
-            container.dataset.tcTinyInit = '1';
-
-            // Make sure the container is positioned so we can overlay the button
-            var cs = window.getComputedStyle(container);
-            if (cs.position === 'static') {
-                container.style.position = 'relative';
-            }
-
-            var btn = document.createElement('button');
-            btn.textContent = 'aA';
-            btn.type = 'button';
-            btn.title = 'Auto-capitalize title';
-            btn.setAttribute('aria-label', 'Auto-capitalize title');
-
-            Object.assign(btn.style, {
-                position:     'absolute',
-                top:          '4px',
-                right:        '4px',
-                zIndex:       '9999',
-                padding:      '3px 10px',
-                cursor:       'pointer',
-                background:   '#1d79a9',
-                color:        '#fff',
-                border:       'none',
-                borderRadius: '3px',
-                fontSize:     '12px',
-                fontWeight:   'bold',
-                lineHeight:   '1.4',
-            });
-
-            btn.addEventListener('click', function (e) {
-                e.preventDefault();
-                e.stopPropagation();
-
-                var style = window.titleCapitalizerStyle || 'chicago';
-
-                // Get plain text (strips bold/italic etc), capitalize, set back
-                var text = editor.getContent({ format: 'text' });
-                var capitalized = capitalizeTitle(text, style);
-
-                // Preserve any inline HTML structure by only changing text nodes
-                // For simplicity (titles are usually plain text), set as text
-                editor.setContent(capitalized);
-                editor.fire('change');
-            });
-
-            container.appendChild(btn);
-        }
-
-        if (editor.initialized) {
-            doInject();
-        } else {
-            editor.on('init', doInject);
+        if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+            var newVal = capitalizeTitle(el.value, style);
+            if (newVal === el.value) return;
+            // Use native setter so Vue's v-model reacts
+            var setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+            setter.call(el, newVal);
+            el.dispatchEvent(new Event('input',  { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+        } else if (el.isContentEditable) {
+            var text = el.innerText || el.textContent || '';
+            var newText = capitalizeTitle(text, style);
+            if (newText === text.trim()) return;
+            el.textContent = newText;
+            // Trigger Vue reactivity
+            el.dispatchEvent(new Event('input',  { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
         }
     }
 
-    // ─── TinyMCE watcher ────────────────────────────────────────────────────────
+    // ─── Attach listeners to a field element ───────────────────────────────────
 
-    function hookTinyMCE() {
-        if (typeof tinymce === 'undefined') {
-            // TinyMCE not loaded yet – try again shortly
-            setTimeout(hookTinyMCE, 400);
-            return;
-        }
+    function attachListeners(el) {
+        if (el.dataset.tcAutoInit) return;
+        el.dataset.tcAutoInit = '1';
 
-        // Process editors that are already initialized
-        if (tinymce.editors && tinymce.editors.length) {
-            tinymce.editors.forEach(addButtonToEditor);
-        }
+        // Auto-capitalize when user leaves the field
+        el.addEventListener('blur', function () {
+            applyCapitalization(el);
+        });
 
-        // Process all future editors (Vue tabs load them lazily)
-        tinymce.on('AddEditor', function (e) {
-            addButtonToEditor(e.editor);
+        // Auto-capitalize after paste (short delay to let paste complete)
+        el.addEventListener('paste', function () {
+            setTimeout(function () { applyCapitalization(el); }, 100);
         });
     }
 
-    // ─── Plain <input> fallback (prefix field and any non-TinyMCE fields) ───────
+    // ─── Find title/subtitle fields by label text ───────────────────────────────
 
-    var INPUT_SELECTORS = [
-        'input[name="prefix"]',
-        'input[name^="prefix["]',
-    ];
+    var TARGET_LABELS = ['title', 'subtitle'];
 
-    function processInput(field) {
-        if (field.dataset.tcInit || field.type === 'hidden' || field.readOnly) return;
-        field.dataset.tcInit = '1';
-
-        var btn = document.createElement('button');
-        btn.textContent = 'aA';
-        btn.type = 'button';
-        btn.title = 'Auto-capitalize';
-
-        Object.assign(btn.style, {
-            marginLeft:  '6px',
-            padding:     '4px 10px',
-            fontSize:    '12px',
-            fontWeight:  'bold',
-            cursor:      'pointer',
-            background:  '#1d79a9',
-            color:       '#fff',
-            border:      'none',
-            borderRadius:'3px',
-        });
-
-        btn.addEventListener('click', function (e) {
-            e.preventDefault();
-            var style = window.titleCapitalizerStyle || 'chicago';
-            var nativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-            nativeSetter.call(field, capitalizeTitle(field.value, style));
-            field.dispatchEvent(new Event('input',  { bubbles: true }));
-            field.dispatchEvent(new Event('change', { bubbles: true }));
-        });
-
-        var wrapper = field.parentElement;
-        if (wrapper && window.getComputedStyle(wrapper).display !== 'flex') {
-            wrapper.style.display    = 'flex';
-            wrapper.style.alignItems = 'center';
-        }
-        field.insertAdjacentElement('afterend', btn);
+    function isTargetLabel(text) {
+        var t = (text || '').trim().toLowerCase().replace(/\s*\*\s*$/, ''); // strip required asterisk
+        return TARGET_LABELS.indexOf(t) !== -1;
     }
 
-    function scanInputs() {
-        INPUT_SELECTORS.forEach(function (sel) {
-            document.querySelectorAll(sel).forEach(processInput);
+    function scanForFields() {
+        // Strategy 1: Find <label> elements whose text is "Title" or "Subtitle",
+        // then look for an input/contenteditable sibling or child nearby.
+        document.querySelectorAll('label').forEach(function (label) {
+            if (!isTargetLabel(label.textContent)) return;
+
+            // The field element is usually a sibling or in the same parent wrapper
+            var wrapper = label.closest('.pkpFormField') || label.parentElement;
+            if (!wrapper) return;
+
+            // Try: plain input
+            wrapper.querySelectorAll('input[type="text"], input:not([type])').forEach(attachListeners);
+
+            // Try: contenteditable (TinyMCE inline or native)
+            wrapper.querySelectorAll('[contenteditable="true"]').forEach(attachListeners);
         });
+
+        // Strategy 2: Match by name/id containing "title" or "subtitle"
+        document.querySelectorAll(
+            'input[name="title"], input[name^="title["],' +
+            'input[name="subtitle"], input[name^="subtitle["],' +
+            'input[id*="title"], input[id*="subtitle"],' +
+            '[contenteditable="true"][id*="title"],' +
+            '[contenteditable="true"][id*="subtitle"]'
+        ).forEach(attachListeners);
     }
 
-    // ─── MutationObserver for dynamically rendered inputs ───────────────────────
+    // ─── MutationObserver – catches Vue lazy-rendered tabs ─────────────────────
 
     var observer = new MutationObserver(function (mutations) {
-        var added = mutations.some(function (m) { return m.addedNodes.length > 0; });
-        if (added) scanInputs();
+        if (mutations.some(function (m) { return m.addedNodes.length > 0; })) {
+            scanForFields();
+        }
     });
 
     // ─── Boot ───────────────────────────────────────────────────────────────────
 
     function boot() {
-        hookTinyMCE();
-        scanInputs();
+        scanForFields();
         observer.observe(document.body, { childList: true, subtree: true });
     }
 
