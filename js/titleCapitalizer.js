@@ -1,8 +1,9 @@
 /**
  * Title Capitalizer for OJS/OMP 3.4
  *
- * Uses event delegation on document to auto-capitalize Title and Subtitle
- * fields on blur and paste. Works even with Vue lazy-rendered components.
+ * Title and Subtitle fields are TinyMCE editors inside iframes
+ * (IDs: titleAbstract-title-control-en, titleAbstract-subtitle-control-en).
+ * We hook into TinyMCE API events to auto-capitalize on blur and paste.
  */
 (function () {
 
@@ -19,7 +20,7 @@
             case 'lowercase': return str.toLowerCase();
             case 'sentence':
                 return str.charAt(0).toUpperCase() + str.slice(1).toLowerCase();
-            default: // chicago / apa / mla – title case
+            default: // title case (chicago/apa/mla)
                 return str.replace(/[A-Za-z0-9\u00C0-\u00FF]+[^\s-]*/g, function (word, index, full) {
                     if (index === 0 || index + word.length === full.length) {
                         return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
@@ -33,109 +34,78 @@
         }
     }
 
-    // ─── Is this element an editable field? ────────────────────────────────────
+    // ─── Is this editor a title or subtitle field? ──────────────────────────────
 
-    function isEditable(el) {
-        if (!el || !el.tagName) return false;
-        var tag = el.tagName.toUpperCase();
-        return (
-            tag === 'INPUT' ||
-            tag === 'TEXTAREA' ||
-            el.isContentEditable ||
-            el.contentEditable === 'true'
-        );
+    function isTitleOrSubtitleEditor(editor) {
+        var id = (editor.id || '').toLowerCase();
+        // Matches: titleAbstract-title-control-en, titleAbstract-subtitle-control-en
+        // and any locale variant (e.g. -fr, -de)
+        return /\btitle\b/.test(id) || /\bsubtitle\b/.test(id);
     }
 
-    // ─── Is this a title or subtitle field? ────────────────────────────────────
+    // ─── Capitalize the content of a TinyMCE editor ────────────────────────────
 
-    function isTitleOrSubtitleField(el) {
-        // Check 1: name / id / placeholder attributes
-        var attrs = [
-            (el.name        || '').toLowerCase(),
-            (el.id          || '').toLowerCase(),
-            (el.placeholder || '').toLowerCase(),
-        ];
-        for (var i = 0; i < attrs.length; i++) {
-            if (/\btitle\b|\bsubtitle\b/.test(attrs[i])) return true;
-        }
-
-        // Check 2: data-* attributes
-        var dsName = (el.dataset && el.dataset.fieldName || '').toLowerCase();
-        if (/\btitle\b|\bsubtitle\b/.test(dsName)) return true;
-
-        // Check 3: walk up DOM looking for a label or wrapper that says Title/Subtitle
-        var node = el.parentElement;
-        var depth = 0;
-        while (node && depth < 8) {
-            // Look for sibling or child <label> elements
-            var labels = node.querySelectorAll('label');
-            for (var j = 0; j < labels.length; j++) {
-                var labelText = labels[j].textContent.replace(/\s*\*$/, '').trim().toLowerCase();
-                if (labelText === 'title' || labelText === 'subtitle') {
-                    return true;
-                }
-            }
-            // Also check aria-label on the element itself
-            var ariaLabel = (el.getAttribute('aria-label') || '').toLowerCase();
-            if (/\btitle\b|\bsubtitle\b/.test(ariaLabel)) return true;
-
-            node = node.parentElement;
-            depth++;
-        }
-
-        return false;
-    }
-
-    // ─── Apply capitalization to an element ────────────────────────────────────
-
-    function applyCapitalization(el) {
+    function applyToEditor(editor) {
         var style = window.titleCapitalizerStyle || 'chicago';
-        var tag = el.tagName.toUpperCase();
-
-        if (tag === 'INPUT' || tag === 'TEXTAREA') {
-            var current = el.value;
-            var capitalized = capitalizeTitle(current, style);
-            if (capitalized === current) return;
-            // Native setter triggers Vue v-model
-            var setter = Object.getOwnPropertyDescriptor(
-                tag === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype,
-                'value'
-            ).set;
-            setter.call(el, capitalized);
-            el.dispatchEvent(new Event('input',  { bubbles: true }));
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-
-        } else if (el.isContentEditable || el.contentEditable === 'true') {
-            var text = el.innerText || el.textContent || '';
-            var capitalized = capitalizeTitle(text, style);
-            if (capitalized === text.trim()) return;
-            // Preserve cursor — just update text content
-            if (typeof el.innerText !== 'undefined') {
-                el.innerText = capitalized;
-            } else {
-                el.textContent = capitalized;
-            }
-            el.dispatchEvent(new Event('input',  { bubbles: true }));
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-        }
+        // getContent({format:'text'}) strips all HTML tags
+        var text = editor.getContent({ format: 'text' });
+        var capitalized = capitalizeTitle(text, style);
+        if (!capitalized || capitalized === text.trim()) return;
+        editor.setContent(capitalized);
+        editor.fire('change');
+        editor.fire('input');
     }
 
-    // ─── Event delegation – blur (capture phase catches all elements) ──────────
+    // ─── Attach listeners to one editor ────────────────────────────────────────
 
-    document.addEventListener('blur', function (e) {
-        var el = e.target;
-        if (!isEditable(el)) return;
-        if (!isTitleOrSubtitleField(el)) return;
-        applyCapitalization(el);
-    }, true); // <-- capture=true is essential for blur delegation
+    function hookEditor(editor) {
+        if (!isTitleOrSubtitleEditor(editor)) return;
+        if (editor._tcHooked) return;
+        editor._tcHooked = true;
 
-    // ─── Event delegation – paste ──────────────────────────────────────────────
+        // Auto-capitalize when user leaves the field
+        editor.on('blur', function () {
+            applyToEditor(editor);
+        });
 
-    document.addEventListener('paste', function (e) {
-        var el = e.target;
-        if (!isEditable(el)) return;
-        if (!isTitleOrSubtitleField(el)) return;
-        setTimeout(function () { applyCapitalization(el); }, 120);
-    }, true);
+        // Auto-capitalize after paste (wait 150ms for paste to complete)
+        editor.on('paste', function () {
+            setTimeout(function () { applyToEditor(editor); }, 150);
+        });
+    }
+
+    // ─── Wait for TinyMCE to be available ──────────────────────────────────────
+
+    function hookTinyMCE() {
+        if (typeof tinymce === 'undefined') {
+            // TinyMCE not loaded yet — retry
+            setTimeout(hookTinyMCE, 300);
+            return;
+        }
+
+        // Hook into editors already initialized (e.g. page loaded with tab open)
+        if (tinymce.editors && tinymce.editors.length) {
+            tinymce.editors.forEach(hookEditor);
+        }
+
+        // Hook into all future editors (Vue lazy-loads tabs)
+        tinymce.on('AddEditor', function (e) {
+            var editor = e.editor;
+            // Editor may not be fully initialized yet — wait for init
+            editor.on('init', function () {
+                hookEditor(editor);
+            });
+            // Also try immediately in case it's already initialized
+            hookEditor(editor);
+        });
+    }
+
+    // ─── Boot ───────────────────────────────────────────────────────────────────
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', hookTinyMCE);
+    } else {
+        hookTinyMCE();
+    }
 
 })();
