@@ -50,29 +50,41 @@ class TitleCapitalizerPlugin extends GenericPlugin
     }
 
     /**
-     * Inject JS into the backend
+     * Inject JS into the backend (only on main page renders, not AJAX sub-requests)
      */
     public function injectJS(string $hookName, array $args): bool
     {
         $templateMgr = $args[0];
-        $request = Application::get()->getRequest();
-        $context = $request->getContext();
+        $template    = $args[1] ?? '';
+        $request     = Application::get()->getRequest();
+
+        // Only inject on full page renders (workflow, submission, etc.)
+        // Skip AJAX fragment templates that have no <head>
+        if (!str_ends_with((string)$template, '.tpl') || str_contains((string)$template, 'grid') || str_contains((string)$template, 'modal')) {
+            return Hook::CONTINUE;
+        }
+
+        $context   = $request->getContext();
         $contextId = $context ? $context->getId() : Application::CONTEXT_SITE;
+        $style     = $this->getSetting($contextId, 'style') ?: 'chicago';
+        $pluginUrl = $request->getBaseUrl() . '/' . $this->getPluginPath();
+        $version   = $this->getCurrentVersion()->getVersionString();
 
-        $style = $this->getSetting($contextId, 'style') ?: 'chicago';
-
+        // Method 1: standard addJavaScript (works for most backend pages)
         $templateMgr->addJavaScript(
             'titleCapitalizer',
-            $request->getBaseUrl() . '/' . $this->getPluginPath() . '/js/titleCapitalizer.js',
+            $pluginUrl . '/js/titleCapitalizer.js?v=' . $version,
             [
                 'contexts' => 'backend',
                 'priority' => STYLE_SEQUENCE_LAST,
             ]
         );
 
+        // Method 2: direct <script> in <head> as a guaranteed fallback
         $templateMgr->addHeader(
-            'titleCapitalizerData',
-            '<script>window.titleCapitalizerStyle = ' . json_encode($style) . ';</script>'
+            'titleCapitalizerInit',
+            '<script>window.titleCapitalizerStyle=' . json_encode($style) . ';</script>' . "\n" .
+            '<script src="' . htmlspecialchars($pluginUrl . '/js/titleCapitalizer.js?v=' . $version) . '" defer></script>'
         );
 
         return Hook::CONTINUE;
