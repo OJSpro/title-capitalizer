@@ -1,6 +1,9 @@
 <?php
+/**
+ * VERSION 1.1 - FIXED NAMING AND LOCALE
+ */
 
-namespace APP\plugins\generic\titleCapitalizer;
+namespace APP\plugins\generic\titlecapitalizer;
 
 use PKP\plugins\GenericPlugin;
 use PKP\plugins\Hook;
@@ -60,7 +63,7 @@ class TitleCapitalizerPlugin extends GenericPlugin
      */
     public function getDisplayName()
     {
-        return 'Title Capitalizer';
+        return __('plugins.generic.titlecapitalizerplugin.displayName');
     }
 
     /**
@@ -68,7 +71,7 @@ class TitleCapitalizerPlugin extends GenericPlugin
      */
     public function getDescription()
     {
-        return 'Adds a button to automatically capitalize submission titles based on selected styles (Chicago, APA, etc.).';
+        return __('plugins.generic.titlecapitalizerplugin.description');
     }
 
     /**
@@ -82,7 +85,7 @@ class TitleCapitalizerPlugin extends GenericPlugin
                 new LinkAction(
                     'settings',
                     new AjaxModal(
-                        $router->url($request, null, null, 'manage', null, ['verb' => 'settings', 'pluginName' => $this->getName(), 'category' => 'generic']),
+                        $router->url($request, null, null, 'manage', null, ['verb' => 'settings', 'pluginName' => 'titlecapitalizer', 'category' => 'generic']),
                         $this->getDisplayName()
                     ),
                     __('common.settings'),

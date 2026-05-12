@@ -2,4 +2,4 @@
 
 require_once('TitleCapitalizerPlugin.php');
 
-return new \APP\plugins\generic\titleCapitalizer\TitleCapitalizerPlugin();
+return new \APP\plugins\generic\titlecapitalizer\TitleCapitalizerPlugin();

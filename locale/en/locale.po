@@ -1,0 +1,14 @@
+msgid "common.settings"
+msgstr "Settings"
+
+msgid "plugins.generic.titlecapitalizerplugin.displayName"
+msgstr "Title Capitalizer"
+
+msgid "plugins.generic.titlecapitalizerplugin.description"
+msgstr "Adds a button to automatically capitalize submission titles based on selected styles (Chicago, APA, etc.)."
+
+msgid "plugins.generic.titlecapitalizerplugin.settings.style"
+msgstr "Capitalization Style"
+
+msgid "plugins.generic.titlecapitalizerplugin.settings.styleDescription"
+msgstr "Select the default style for the auto-capitalization button."
