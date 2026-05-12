@@ -1,9 +1,8 @@
 /**
  * Title Capitalizer for OJS/OMP 3.4
  *
- * Title and Subtitle fields are TinyMCE editors inside iframes
- * (IDs: titleAbstract-title-control-en, titleAbstract-subtitle-control-en).
- * We hook into TinyMCE API events to auto-capitalize on blur and paste.
+ * Hooks into TinyMCE editors for Title and Subtitle fields and auto-capitalizes
+ * on blur and paste events. Uses the same pattern as PlainPaste plugin.
  */
 (function () {
 
@@ -34,78 +33,78 @@
         }
     }
 
-    // ─── Is this editor a title or subtitle field? ──────────────────────────────
+    // ─── Is this a title or subtitle editor? ───────────────────────────────────
 
-    function isTitleOrSubtitleEditor(editor) {
+    function isTitleEditor(editor) {
         var id = (editor.id || '').toLowerCase();
         // Matches: titleAbstract-title-control-en, titleAbstract-subtitle-control-en
-        // and any locale variant (e.g. -fr, -de)
-        return /\btitle\b/.test(id) || /\bsubtitle\b/.test(id);
+        // The word "title" appears as a dash-delimited segment, not just "titleabstract"
+        return /-title-|-subtitle-/.test(id);
     }
 
     // ─── Capitalize the content of a TinyMCE editor ────────────────────────────
 
     function applyToEditor(editor) {
         var style = window.titleCapitalizerStyle || 'chicago';
-        // getContent({format:'text'}) strips all HTML tags
-        var text = editor.getContent({ format: 'text' });
+        var text = editor.getContent({ format: 'text' }).trim();
         var capitalized = capitalizeTitle(text, style);
-        if (!capitalized || capitalized === text.trim()) return;
+        if (!capitalized || capitalized === text) return;
+        console.log('TitleCapitalizer: capitalizing "' + text + '" → "' + capitalized + '"');
         editor.setContent(capitalized);
         editor.fire('change');
-        editor.fire('input');
     }
 
-    // ─── Attach listeners to one editor ────────────────────────────────────────
+    // ─── Hook one editor ───────────────────────────────────────────────────────
 
-    function hookEditor(editor) {
-        if (!isTitleOrSubtitleEditor(editor)) return;
+    function setupEditor(editor) {
+        if (!isTitleEditor(editor)) return;
         if (editor._tcHooked) return;
         editor._tcHooked = true;
 
-        // Auto-capitalize when user leaves the field
+        console.log('TitleCapitalizer: hooking editor ' + editor.id);
+
+        // Auto-capitalize on blur (user clicks away)
         editor.on('blur', function () {
             applyToEditor(editor);
         });
 
-        // Auto-capitalize after paste (wait 150ms for paste to complete)
-        editor.on('paste', function () {
-            setTimeout(function () { applyToEditor(editor); }, 150);
+        // Auto-capitalize on paste (after paste completes)
+        editor.on('PastePreProcess PastePostProcess', function () {
+            setTimeout(function () { applyToEditor(editor); }, 200);
         });
     }
 
-    // ─── Wait for TinyMCE to be available ──────────────────────────────────────
+    // ─── Initialize (mirrors PlainPaste pattern exactly) ───────────────────────
 
-    function hookTinyMCE() {
+    function init() {
         if (typeof tinymce === 'undefined') {
-            // TinyMCE not loaded yet — retry
-            setTimeout(hookTinyMCE, 300);
-            return;
+            return false;
         }
 
-        // Hook into editors already initialized (e.g. page loaded with tab open)
-        if (tinymce.editors && tinymce.editors.length) {
-            tinymce.editors.forEach(hookEditor);
-        }
-
-        // Hook into all future editors (Vue lazy-loads tabs)
-        tinymce.on('AddEditor', function (e) {
-            var editor = e.editor;
-            // Editor may not be fully initialized yet — wait for init
-            editor.on('init', function () {
-                hookEditor(editor);
-            });
-            // Also try immediately in case it's already initialized
-            hookEditor(editor);
+        // Apply to any already initialized editors
+        tinymce.get().forEach(function (editor) {
+            setupEditor(editor);
         });
+
+        // Listen for any new editors being added (Vue lazy-loads tabs)
+        tinymce.on('AddEditor', function (e) {
+            setupEditor(e.editor);
+        });
+
+        return true;
     }
 
-    // ─── Boot ───────────────────────────────────────────────────────────────────
-
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', hookTinyMCE);
-    } else {
-        hookTinyMCE();
+    // Attempt initialization immediately
+    if (!init()) {
+        // TinyMCE not ready yet — poll until it is (same as PlainPaste)
+        var attempts = 0;
+        var maxAttempts = 20;
+        var poll = setInterval(function () {
+            attempts++;
+            if (init() || attempts >= maxAttempts) {
+                clearInterval(poll);
+            }
+        }, 500);
     }
 
 })();

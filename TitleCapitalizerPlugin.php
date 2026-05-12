@@ -50,41 +50,35 @@ class TitleCapitalizerPlugin extends GenericPlugin
     }
 
     /**
-     * Inject JS into the backend (only on main page renders, not AJAX sub-requests)
+     * Inject JS into the backend — fires once per page request via a static guard.
      */
     public function injectJS(string $hookName, array $args): bool
     {
-        $templateMgr = $args[0];
-        $template    = $args[1] ?? '';
-        $request     = Application::get()->getRequest();
-
-        // Only inject on full page renders (workflow, submission, etc.)
-        // Skip AJAX fragment templates that have no <head>
-        if (!str_ends_with((string)$template, '.tpl') || str_contains((string)$template, 'grid') || str_contains((string)$template, 'modal')) {
+        static $injected = false;
+        if ($injected) {
             return Hook::CONTINUE;
         }
+        $injected = true;
 
-        $context   = $request->getContext();
-        $contextId = $context ? $context->getId() : Application::CONTEXT_SITE;
-        $style     = $this->getSetting($contextId, 'style') ?: 'chicago';
-        $pluginUrl = $request->getBaseUrl() . '/' . $this->getPluginPath();
-        $version   = $this->getCurrentVersion()->getVersionString();
+        $templateMgr = $args[0];
+        $request     = Application::get()->getRequest();
+        $context     = $request->getContext();
+        $contextId   = $context ? $context->getId() : Application::CONTEXT_SITE;
+        $style       = $this->getSetting($contextId, 'style') ?: 'chicago';
+        $pluginUrl   = $request->getBaseUrl() . '/' . $this->getPluginPath();
 
-        // Method 1: standard addJavaScript (works for most backend pages)
         $templateMgr->addJavaScript(
             'titleCapitalizer',
-            $pluginUrl . '/js/titleCapitalizer.js?v=' . $version,
+            $pluginUrl . '/js/titleCapitalizer.js',
             [
                 'contexts' => 'backend',
                 'priority' => STYLE_SEQUENCE_LAST,
             ]
         );
 
-        // Method 2: direct <script> in <head> as a guaranteed fallback
         $templateMgr->addHeader(
-            'titleCapitalizerInit',
-            '<script>window.titleCapitalizerStyle=' . json_encode($style) . ';</script>' . "\n" .
-            '<script src="' . htmlspecialchars($pluginUrl . '/js/titleCapitalizer.js?v=' . $version) . '" defer></script>'
+            'titleCapitalizerStyle',
+            '<script>window.titleCapitalizerStyle=' . json_encode($style) . ';</script>'
         );
 
         return Hook::CONTINUE;
