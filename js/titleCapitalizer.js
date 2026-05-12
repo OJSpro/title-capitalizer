@@ -1,6 +1,9 @@
 /**
  * Title Capitalizer for OJS/OMP 3.4
- * Targets Vue-rendered title/subtitle fields in submission wizard and metadata forms.
+ *
+ * The Title and Subtitle fields use "field-rich-text" (TinyMCE), NOT plain
+ * <input> elements. This script hooks into TinyMCE editors whose IDs contain
+ * "title" or "subtitle" and injects an aA button into their container.
  */
 (function () {
 
@@ -9,22 +12,20 @@
     var SMALL_WORDS = /^(a|an|and|as|at|but|by|en|for|if|in|nor|of|on|or|per|so|the|to|v\.?|vs\.?|via|yet)$/i;
 
     function capitalizeTitle(str, style) {
-        if (!str || !str.trim()) return str;
+        str = (str || '').replace(/\s+/g, ' ').trim();
+        if (!str) return str;
 
         switch (style) {
             case 'uppercase': return str.toUpperCase();
             case 'lowercase': return str.toLowerCase();
             case 'sentence':
                 return str.charAt(0).toUpperCase() + str.slice(1).toLowerCase();
-            default: // chicago / apa / mla – all use title case
+            default: // chicago / apa / mla – title case
                 return str.replace(/[A-Za-z0-9\u00C0-\u00FF]+[^\s-]*/g, function (word, index, full) {
-                    // Always capitalize first and last word
                     if (index === 0 || index + word.length === full.length) {
                         return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
                     }
-                    // Keep acronyms / mixed-case words intact
-                    if (/[A-Z]{2,}|[A-Z][a-z]/.test(word.slice(1))) return word;
-                    // Lowercase small words unless after a colon
+                    if (/[A-Z]{2,}/.test(word)) return word; // keep acronyms
                     if (SMALL_WORDS.test(word) && full.charAt(index - 2) !== ':') {
                         return word.toLowerCase();
                     }
@@ -33,117 +34,165 @@
         }
     }
 
-    // ─── Button Factory ─────────────────────────────────────────────────────────
+    // ─── Inject button into a TinyMCE editor container ─────────────────────────
 
-    function makeButton(field) {
+    function addButtonToEditor(editor) {
+        var editorId = (editor.id || '').toLowerCase();
+
+        // Only process title / subtitle fields
+        if (editorId.indexOf('title') === -1 && editorId.indexOf('subtitle') === -1) {
+            return;
+        }
+
+        function doInject() {
+            var container = editor.getContainer();
+            if (!container || container.dataset.tcTinyInit) return;
+            container.dataset.tcTinyInit = '1';
+
+            // Make sure the container is positioned so we can overlay the button
+            var cs = window.getComputedStyle(container);
+            if (cs.position === 'static') {
+                container.style.position = 'relative';
+            }
+
+            var btn = document.createElement('button');
+            btn.textContent = 'aA';
+            btn.type = 'button';
+            btn.title = 'Auto-capitalize title';
+            btn.setAttribute('aria-label', 'Auto-capitalize title');
+
+            Object.assign(btn.style, {
+                position:     'absolute',
+                top:          '4px',
+                right:        '4px',
+                zIndex:       '9999',
+                padding:      '3px 10px',
+                cursor:       'pointer',
+                background:   '#1d79a9',
+                color:        '#fff',
+                border:       'none',
+                borderRadius: '3px',
+                fontSize:     '12px',
+                fontWeight:   'bold',
+                lineHeight:   '1.4',
+            });
+
+            btn.addEventListener('click', function (e) {
+                e.preventDefault();
+                e.stopPropagation();
+
+                var style = window.titleCapitalizerStyle || 'chicago';
+
+                // Get plain text (strips bold/italic etc), capitalize, set back
+                var text = editor.getContent({ format: 'text' });
+                var capitalized = capitalizeTitle(text, style);
+
+                // Preserve any inline HTML structure by only changing text nodes
+                // For simplicity (titles are usually plain text), set as text
+                editor.setContent(capitalized);
+                editor.fire('change');
+            });
+
+            container.appendChild(btn);
+        }
+
+        if (editor.initialized) {
+            doInject();
+        } else {
+            editor.on('init', doInject);
+        }
+    }
+
+    // ─── TinyMCE watcher ────────────────────────────────────────────────────────
+
+    function hookTinyMCE() {
+        if (typeof tinymce === 'undefined') {
+            // TinyMCE not loaded yet – try again shortly
+            setTimeout(hookTinyMCE, 400);
+            return;
+        }
+
+        // Process editors that are already initialized
+        if (tinymce.editors && tinymce.editors.length) {
+            tinymce.editors.forEach(addButtonToEditor);
+        }
+
+        // Process all future editors (Vue tabs load them lazily)
+        tinymce.on('AddEditor', function (e) {
+            addButtonToEditor(e.editor);
+        });
+    }
+
+    // ─── Plain <input> fallback (prefix field and any non-TinyMCE fields) ───────
+
+    var INPUT_SELECTORS = [
+        'input[name="prefix"]',
+        'input[name^="prefix["]',
+    ];
+
+    function processInput(field) {
+        if (field.dataset.tcInit || field.type === 'hidden' || field.readOnly) return;
+        field.dataset.tcInit = '1';
+
         var btn = document.createElement('button');
         btn.textContent = 'aA';
         btn.type = 'button';
-        btn.title = 'Auto-capitalize title';
-        btn.setAttribute('aria-label', 'Auto-capitalize title');
-        btn.className = 'pkpButton title-capitalizer-btn';
+        btn.title = 'Auto-capitalize';
 
         Object.assign(btn.style, {
-            marginLeft: '6px',
-            padding: '4px 10px',
-            fontSize: '12px',
-            fontWeight: 'bold',
-            cursor: 'pointer',
-            flexShrink: '0',
+            marginLeft:  '6px',
+            padding:     '4px 10px',
+            fontSize:    '12px',
+            fontWeight:  'bold',
+            cursor:      'pointer',
+            background:  '#1d79a9',
+            color:       '#fff',
+            border:      'none',
+            borderRadius:'3px',
         });
 
         btn.addEventListener('click', function (e) {
             e.preventDefault();
-            e.stopPropagation();
             var style = window.titleCapitalizerStyle || 'chicago';
-            var newVal = capitalizeTitle(field.value, style);
-            if (newVal === field.value) return;
-
-            // Set value using native input value setter so Vue picks it up
-            var nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-            nativeInputValueSetter.call(field, newVal);
-
-            // Dispatch both input and change events for Vue reactivity
-            field.dispatchEvent(new Event('input', { bubbles: true }));
+            var nativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+            nativeSetter.call(field, capitalizeTitle(field.value, style));
+            field.dispatchEvent(new Event('input',  { bubbles: true }));
             field.dispatchEvent(new Event('change', { bubbles: true }));
         });
 
-        return btn;
-    }
-
-    // ─── Field Detection ────────────────────────────────────────────────────────
-
-    /**
-     * OJS 3.4 Vue forms render fields with a data-cy attribute or
-     * with IDs/names containing "title" / "subtitle".
-     * We match all plausible patterns.
-     */
-    var FIELD_SELECTORS = [
-        // Submission wizard & metadata edit (Vue multilingual field)
-        'input[name="title"]',
-        'input[name^="title["]',
-        'input[name="subtitle"]',
-        'input[name^="subtitle["]',
-        // Fallback: id-based selectors used in older forms / quick-submit
-        'input[id^="title"]',
-        'input[id^="subtitle"]',
-        // data-cy attributes used in OJS 3.4 Vue tests
-        'input[data-cy="title"]',
-        'input[data-cy="subtitle"]',
-    ];
-
-    function processField(field) {
-        // Skip if already handled, hidden, or read-only
-        if (field.dataset.tcInit || field.type === 'hidden' || field.readOnly) return;
-        field.dataset.tcInit = '1';
-
-        // Wrap in a flex container if not already
         var wrapper = field.parentElement;
-        if (wrapper && getComputedStyle(wrapper).display !== 'flex') {
-            wrapper.style.display = 'flex';
+        if (wrapper && window.getComputedStyle(wrapper).display !== 'flex') {
+            wrapper.style.display    = 'flex';
             wrapper.style.alignItems = 'center';
-            wrapper.style.flexWrap = 'wrap';
         }
-
-        field.insertAdjacentElement('afterend', makeButton(field));
+        field.insertAdjacentElement('afterend', btn);
     }
 
-    function scanFields() {
-        FIELD_SELECTORS.forEach(function (sel) {
-            document.querySelectorAll(sel).forEach(processField);
+    function scanInputs() {
+        INPUT_SELECTORS.forEach(function (sel) {
+            document.querySelectorAll(sel).forEach(processInput);
         });
     }
 
-    // ─── MutationObserver (catches Vue-rendered fields) ─────────────────────────
+    // ─── MutationObserver for dynamically rendered inputs ───────────────────────
 
     var observer = new MutationObserver(function (mutations) {
-        var needsScan = mutations.some(function (m) {
-            return m.addedNodes.length > 0;
-        });
-        if (needsScan) scanFields();
+        var added = mutations.some(function (m) { return m.addedNodes.length > 0; });
+        if (added) scanInputs();
     });
 
-    function startObserver() {
+    // ─── Boot ───────────────────────────────────────────────────────────────────
+
+    function boot() {
+        hookTinyMCE();
+        scanInputs();
         observer.observe(document.body, { childList: true, subtree: true });
     }
 
-    // ─── Init ───────────────────────────────────────────────────────────────────
-
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', function () {
-            scanFields();
-            startObserver();
-        });
+        document.addEventListener('DOMContentLoaded', boot);
     } else {
-        scanFields();
-        startObserver();
+        boot();
     }
-
-    // Fallback polling for very late Vue mounts (tabs, modals)
-    var pollCount = 0;
-    var poll = setInterval(function () {
-        scanFields();
-        if (++pollCount >= 30) clearInterval(poll); // stop after 30 s
-    }, 1000);
 
 })();
