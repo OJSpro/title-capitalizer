@@ -1,9 +1,8 @@
 /**
  * Title Capitalizer for OJS/OMP 3.4
  *
- * Auto-capitalizes the Title and Subtitle fields on blur and paste.
- * Works with plain <input>, contenteditable divs, and TinyMCE inline editors.
- * Detects fields by their visible label text ("Title" / "Subtitle").
+ * Uses event delegation on document to auto-capitalize Title and Subtitle
+ * fields on blur and paste. Works even with Vue lazy-rendered components.
  */
 (function () {
 
@@ -12,7 +11,7 @@
     var SMALL_WORDS = /^(a|an|and|as|at|but|by|en|for|if|in|nor|of|on|or|per|so|the|to|v\.?|vs\.?|via|yet)$/i;
 
     function capitalizeTitle(str, style) {
-        str = (str || '').replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim(); // strip HTML
+        str = (str || '').replace(/<[^>]+>/g, '').replace(/&[a-z]+;/gi, ' ').replace(/\s+/g, ' ').trim();
         if (!str) return str;
 
         switch (style) {
@@ -34,102 +33,109 @@
         }
     }
 
-    // ─── Apply to an element (input or contenteditable) ────────────────────────
+    // ─── Is this element an editable field? ────────────────────────────────────
+
+    function isEditable(el) {
+        if (!el || !el.tagName) return false;
+        var tag = el.tagName.toUpperCase();
+        return (
+            tag === 'INPUT' ||
+            tag === 'TEXTAREA' ||
+            el.isContentEditable ||
+            el.contentEditable === 'true'
+        );
+    }
+
+    // ─── Is this a title or subtitle field? ────────────────────────────────────
+
+    function isTitleOrSubtitleField(el) {
+        // Check 1: name / id / placeholder attributes
+        var attrs = [
+            (el.name        || '').toLowerCase(),
+            (el.id          || '').toLowerCase(),
+            (el.placeholder || '').toLowerCase(),
+        ];
+        for (var i = 0; i < attrs.length; i++) {
+            if (/\btitle\b|\bsubtitle\b/.test(attrs[i])) return true;
+        }
+
+        // Check 2: data-* attributes
+        var dsName = (el.dataset && el.dataset.fieldName || '').toLowerCase();
+        if (/\btitle\b|\bsubtitle\b/.test(dsName)) return true;
+
+        // Check 3: walk up DOM looking for a label or wrapper that says Title/Subtitle
+        var node = el.parentElement;
+        var depth = 0;
+        while (node && depth < 8) {
+            // Look for sibling or child <label> elements
+            var labels = node.querySelectorAll('label');
+            for (var j = 0; j < labels.length; j++) {
+                var labelText = labels[j].textContent.replace(/\s*\*$/, '').trim().toLowerCase();
+                if (labelText === 'title' || labelText === 'subtitle') {
+                    return true;
+                }
+            }
+            // Also check aria-label on the element itself
+            var ariaLabel = (el.getAttribute('aria-label') || '').toLowerCase();
+            if (/\btitle\b|\bsubtitle\b/.test(ariaLabel)) return true;
+
+            node = node.parentElement;
+            depth++;
+        }
+
+        return false;
+    }
+
+    // ─── Apply capitalization to an element ────────────────────────────────────
 
     function applyCapitalization(el) {
         var style = window.titleCapitalizerStyle || 'chicago';
+        var tag = el.tagName.toUpperCase();
 
-        if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
-            var newVal = capitalizeTitle(el.value, style);
-            if (newVal === el.value) return;
-            // Use native setter so Vue's v-model reacts
-            var setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-            setter.call(el, newVal);
+        if (tag === 'INPUT' || tag === 'TEXTAREA') {
+            var current = el.value;
+            var capitalized = capitalizeTitle(current, style);
+            if (capitalized === current) return;
+            // Native setter triggers Vue v-model
+            var setter = Object.getOwnPropertyDescriptor(
+                tag === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype,
+                'value'
+            ).set;
+            setter.call(el, capitalized);
             el.dispatchEvent(new Event('input',  { bubbles: true }));
             el.dispatchEvent(new Event('change', { bubbles: true }));
-        } else if (el.isContentEditable) {
+
+        } else if (el.isContentEditable || el.contentEditable === 'true') {
             var text = el.innerText || el.textContent || '';
-            var newText = capitalizeTitle(text, style);
-            if (newText === text.trim()) return;
-            el.textContent = newText;
-            // Trigger Vue reactivity
+            var capitalized = capitalizeTitle(text, style);
+            if (capitalized === text.trim()) return;
+            // Preserve cursor — just update text content
+            if (typeof el.innerText !== 'undefined') {
+                el.innerText = capitalized;
+            } else {
+                el.textContent = capitalized;
+            }
             el.dispatchEvent(new Event('input',  { bubbles: true }));
             el.dispatchEvent(new Event('change', { bubbles: true }));
         }
     }
 
-    // ─── Attach listeners to a field element ───────────────────────────────────
+    // ─── Event delegation – blur (capture phase catches all elements) ──────────
 
-    function attachListeners(el) {
-        if (el.dataset.tcAutoInit) return;
-        el.dataset.tcAutoInit = '1';
+    document.addEventListener('blur', function (e) {
+        var el = e.target;
+        if (!isEditable(el)) return;
+        if (!isTitleOrSubtitleField(el)) return;
+        applyCapitalization(el);
+    }, true); // <-- capture=true is essential for blur delegation
 
-        // Auto-capitalize when user leaves the field
-        el.addEventListener('blur', function () {
-            applyCapitalization(el);
-        });
+    // ─── Event delegation – paste ──────────────────────────────────────────────
 
-        // Auto-capitalize after paste (short delay to let paste complete)
-        el.addEventListener('paste', function () {
-            setTimeout(function () { applyCapitalization(el); }, 100);
-        });
-    }
-
-    // ─── Find title/subtitle fields by label text ───────────────────────────────
-
-    var TARGET_LABELS = ['title', 'subtitle'];
-
-    function isTargetLabel(text) {
-        var t = (text || '').trim().toLowerCase().replace(/\s*\*\s*$/, ''); // strip required asterisk
-        return TARGET_LABELS.indexOf(t) !== -1;
-    }
-
-    function scanForFields() {
-        // Strategy 1: Find <label> elements whose text is "Title" or "Subtitle",
-        // then look for an input/contenteditable sibling or child nearby.
-        document.querySelectorAll('label').forEach(function (label) {
-            if (!isTargetLabel(label.textContent)) return;
-
-            // The field element is usually a sibling or in the same parent wrapper
-            var wrapper = label.closest('.pkpFormField') || label.parentElement;
-            if (!wrapper) return;
-
-            // Try: plain input
-            wrapper.querySelectorAll('input[type="text"], input:not([type])').forEach(attachListeners);
-
-            // Try: contenteditable (TinyMCE inline or native)
-            wrapper.querySelectorAll('[contenteditable="true"]').forEach(attachListeners);
-        });
-
-        // Strategy 2: Match by name/id containing "title" or "subtitle"
-        document.querySelectorAll(
-            'input[name="title"], input[name^="title["],' +
-            'input[name="subtitle"], input[name^="subtitle["],' +
-            'input[id*="title"], input[id*="subtitle"],' +
-            '[contenteditable="true"][id*="title"],' +
-            '[contenteditable="true"][id*="subtitle"]'
-        ).forEach(attachListeners);
-    }
-
-    // ─── MutationObserver – catches Vue lazy-rendered tabs ─────────────────────
-
-    var observer = new MutationObserver(function (mutations) {
-        if (mutations.some(function (m) { return m.addedNodes.length > 0; })) {
-            scanForFields();
-        }
-    });
-
-    // ─── Boot ───────────────────────────────────────────────────────────────────
-
-    function boot() {
-        scanForFields();
-        observer.observe(document.body, { childList: true, subtree: true });
-    }
-
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', boot);
-    } else {
-        boot();
-    }
+    document.addEventListener('paste', function (e) {
+        var el = e.target;
+        if (!isEditable(el)) return;
+        if (!isTitleOrSubtitleField(el)) return;
+        setTimeout(function () { applyCapitalization(el); }, 120);
+    }, true);
 
 })();
