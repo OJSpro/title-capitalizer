@@ -4,12 +4,12 @@
 	});
 </script>
 
-<form class="pkp_form" id="titleCapitalizerSettingsForm" method="post" action="{url router=$smarty.const.ROUTE_COMPONENT component="grid.settings.plugins.SettingsPluginGridHandler" op="manage" verb="settings" pluginName=$pluginName category="generic"}">
+<form class="pkp_form" id="titleCapitalizerSettingsForm" method="post" action="{url router=$smarty.const.ROUTE_COMPONENT component="grid.settings.plugins.SettingsPluginGridHandler" op="manage" verb="settings" plugin=$pluginName category="generic"}">
 	{csrf}
 	<input type="hidden" name="save" value="1" />
 	
 	{fbvFormArea id="styleSetting"}
-		{fbvFormSection title="plugins.generic.titleCapitalizer.settings.style" description="plugins.generic.titleCapitalizer.settings.styleDescription"}
+		{fbvFormSection title="plugins.generic.titlecapitalizer.settings.style" description="plugins.generic.titlecapitalizer.settings.styleDescription"}
 			{fbvElement type="select" id="style" name="style" from=$styles selected=$style translate=false}
 		{/fbvFormSection}
 	{/fbvFormArea}
